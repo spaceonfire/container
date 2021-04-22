@@ -4,31 +4,42 @@ declare(strict_types=1);
 
 namespace spaceonfire\Container\ServiceProvider;
 
-use spaceonfire\Container\ContainerAwareTrait;
+use Psr\Container\ContainerInterface;
+use spaceonfire\Container\DefinitionAggregateInterface;
+use spaceonfire\Container\Exception\ContainerException;
 
 abstract class AbstractServiceProvider implements ServiceProviderInterface
 {
-    use ContainerAwareTrait;
+    protected ?string $identifier = null;
 
-    /**
-     * @var string|null
-     */
-    protected $identifier;
+    protected ?ContainerInterface $container = null;
 
-    /**
-     * @inheritDoc
-     */
-    public function setIdentifier(string $id): ServiceProviderInterface
+    public function setContainer(ContainerInterface $container): void
     {
-        $this->identifier = $id;
-        return $this;
+        $this->container = $container;
     }
 
     /**
-     * @inheritDoc
+     * @return ContainerInterface&DefinitionAggregateInterface
      */
-    public function getIdentifier(): string
+    public function getContainer(): ContainerInterface
+    {
+        if (null === $this->container) {
+            throw new ContainerException('No container implementation has been set.');
+        }
+
+        \assert($this->container instanceof DefinitionAggregateInterface);
+
+        return $this->container;
+    }
+
+    public function getId(): string
     {
         return $this->identifier ?? static::class;
+    }
+
+    public function setId(string $id): void
+    {
+        $this->identifier = $id;
     }
 }

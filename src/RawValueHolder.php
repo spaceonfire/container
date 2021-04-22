@@ -5,19 +5,17 @@ declare(strict_types=1);
 namespace spaceonfire\Container;
 
 /**
- * Class RawValueHolder.
- * @final
+ * @template T
  */
-class RawValueHolder
+final class RawValueHolder
 {
     /**
-     * @var mixed
+     * @var T
      */
     private $value;
 
     /**
-     * RawValueHolder constructor.
-     * @param mixed $value
+     * @param T $value
      */
     public function __construct($value)
     {
@@ -25,8 +23,7 @@ class RawValueHolder
     }
 
     /**
-     * Getter for `value` property.
-     * @return mixed
+     * @return T
      */
     public function getValue()
     {

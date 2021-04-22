@@ -4,126 +4,90 @@ declare(strict_types=1);
 
 namespace spaceonfire\Container;
 
-use Generator;
-use IteratorAggregate;
-use Psr\Container\ContainerInterface as PsrContainerInterface;
-use spaceonfire\Collection\ArrayHelper;
-use spaceonfire\Collection\Collection;
-use spaceonfire\Collection\CollectionInterface;
-use spaceonfire\Container\Definition\DefinitionInterface;
+use Psr\Container\ContainerInterface;
 use spaceonfire\Container\Exception\ContainerException;
 use spaceonfire\Container\Exception\NotFoundException;
-use Traversable;
 
 /**
- * Class CompositeContainer
- *
- * Attention: You should not extend this class because it will become final in the next major release
- * after the backward compatibility aliases are removed.
- *
- * @final
+ * @implements \IteratorAggregate<ContainerInterface>
  */
-class CompositeContainer implements ContainerWithServiceProvidersInterface, ContainerAwareInterface, IteratorAggregate
+final class CompositeContainer implements
+    ContainerInterface,
+    GetWithOptionsMethodInterface,
+    ContainerAwareInterface,
+    ServiceProviderAggregateInterface,
+    DefinitionAggregateInterface,
+    FactoryAggregateInterface,
+    InvokerInterface,
+    \IteratorAggregate
 {
-    use ContainerAwareTrait;
-
-    private const DEFAULT_PRIORITY = 999;
+    private ContainerInterface $rootContainer;
 
     /**
-     * @var array<int, PsrContainerInterface[]>
+     * @template T
+     * @var array<class-string<T>,array{T,int}>
      */
-    private $containers = [];
+    private array $activeInstances = [];
 
     /**
-     * @var ContainerInterface|null
+     * @var array<int, ContainerInterface[]>
      */
-    private $primary;
+    private array $containers = [];
 
-    /**
-     * CompositeContainer constructor.
-     * @param PsrContainerInterface[] $containers
-     */
-    public function __construct(iterable $containers = [])
+    private int $lastPriority = 0;
+
+    public function __construct(ContainerInterface ...$containers)
     {
         $this->setContainer($this);
-        $this->addContainers($containers);
+
+        foreach ($containers as $container) {
+            $this->addContainer($container);
+        }
     }
 
-    /**
-     * @inheritDoc
-     */
-    public function setContainer(ContainerInterface $container)
+    public function setContainer(ContainerInterface $container): void
     {
-        $this->container = $container;
+        $this->rootContainer = $container;
+
         foreach ($this->getIterator() as $delegate) {
             if ($delegate instanceof ContainerAwareInterface) {
                 $delegate->setContainer($container);
             }
         }
-        return $this;
+    }
+
+    public function getContainer(): ContainerInterface
+    {
+        return $this->rootContainer;
     }
 
     /**
-     * Add containers to the chain
-     * @param PsrContainerInterface[] $containers
-     * @return $this
+     * Attaches a container to the composite container.
+     * @param ContainerInterface $container
+     * @param int|null $priority
      */
-    public function addContainers(iterable $containers): self
+    public function addContainer(ContainerInterface $container, ?int $priority = null): void
     {
-        if ($containers instanceof Traversable) {
-            $containers = iterator_to_array($containers);
-        }
+        $priority ??= $this->lastPriority + 10;
+        $this->lastPriority = $priority > $this->lastPriority ? $priority : $this->lastPriority;
 
-        $isAssoc = ArrayHelper::isArrayAssoc($containers);
-
-        foreach ($containers as $priority => $container) {
-            if (is_int($priority)) {
-                // Assoc means that the keys are not in order.
-                // So if this is integer key we threat it as priority.
-                // In other way add gaps between keys
-                $priority = $isAssoc ? $priority : ($priority + 1) * 10;
-            } else {
-                $priority = null;
-            }
-
-            $this->addContainer($container, $priority ?? self::DEFAULT_PRIORITY);
-        }
-        return $this;
-    }
-
-    /**
-     * Add container to the chain
-     * @param PsrContainerInterface $container
-     * @param int $priority
-     * @return $this
-     */
-    public function addContainer(PsrContainerInterface $container, int $priority = self::DEFAULT_PRIORITY): self
-    {
-        if ($container instanceof ContainerInterface) {
-            $this->setPrimary($container);
-        }
+        $this->setActiveInstance($container, $priority);
 
         if ($container instanceof ContainerAwareInterface) {
             $container->setContainer($this->getContainer());
         }
 
-        if (isset($this->containers[$priority])) {
-            $this->containers[$priority][] = $container;
-        } else {
-            $this->containers[$priority] = [$container];
-        }
-
-        return $this;
+        $this->containers[$priority] ??= [];
+        $this->containers[$priority][] = $container;
     }
 
     /**
-     * Iterates over inner containers
-     * @return Generator<PsrContainerInterface>
+     * @return \Generator<ContainerInterface>
      */
-    public function getIterator(): Generator
+    public function getIterator(): \Generator
     {
         // Sort by priority
-        ksort($this->containers);
+        \ksort($this->containers);
 
         foreach ($this->containers as $containers) {
             foreach ($containers as $container) {
@@ -132,90 +96,33 @@ class CompositeContainer implements ContainerWithServiceProvidersInterface, Cont
         }
     }
 
-    /**
-     * @inheritDoc
-     */
-    public function get($id, array $arguments = [])
+    public function get(string $id, $options = null)
     {
-        foreach ($this->getIterator() as $container) {
-            if ($container->has($id)) {
-                return $container instanceof ContainerInterface
-                    ? $container->get($id, $arguments)
-                    : $container->get($id);
-            }
-        }
-
-        throw new NotFoundException(sprintf('Alias (%s) is not being managed by any container in chain', $id));
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public function has($id): bool
-    {
-        foreach ($this->getIterator() as $container) {
-            if ($container->has($id)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public function make(string $alias, array $arguments = [])
-    {
-        return $this->getPrimary()->make($alias, $arguments);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public function invoke(callable $callable, array $arguments = [])
-    {
-        return $this->getPrimary()->invoke($callable, $arguments);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public function add(string $id, $concrete = null, bool $shared = false): DefinitionInterface
-    {
-        return $this->getPrimary()->add($id, $concrete, $shared);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public function share(string $id, $concrete = null): DefinitionInterface
-    {
-        return $this->getPrimary()->share($id, $concrete);
-    }
-
-    /**
-     * @inheritDoc
-     */
-    public function addServiceProvider($provider): ContainerWithServiceProvidersInterface
-    {
-        $primary = $this->getPrimary();
-
-        if ($primary instanceof ContainerWithServiceProvidersInterface) {
-            $primary->addServiceProvider($provider);
+        if (isset($this->activeInstances[$id]) && $this instanceof $id) {
             return $this;
         }
 
-        throw new ContainerException('No container provided with support of service providers');
+        foreach ($this->getIterator() as $container) {
+            if (!$container->has($id)) {
+                continue;
+            }
+
+            return $container instanceof GetWithOptionsMethodInterface
+                ? $container->get($id, $options)
+                : $container->get($id);
+        }
+
+        throw NotFoundException::alias($id);
     }
 
-    /**
-     * @inheritDoc
-     */
-    public function hasTagged(string $tag): bool
+    public function has(string $id): bool
     {
+        if (isset($this->activeInstances[$id])) {
+            return true;
+        }
+
         foreach ($this->getIterator() as $container) {
-            if ($container instanceof ContainerInterface && $container->hasTagged($tag)) {
+            if ($container->has($id)) {
                 return true;
             }
         }
@@ -223,51 +130,95 @@ class CompositeContainer implements ContainerWithServiceProvidersInterface, Cont
         return false;
     }
 
-    /**
-     * @inheritDoc
-     */
-    public function getTagged(string $tag): CollectionInterface
+    public function hasFactory(string $class): bool
     {
-        $result = new Collection();
+        return $this->getActiveInstance(FactoryAggregateInterface::class)->hasFactory($class);
+    }
 
+    public function getFactory(string $class): FactoryInterface
+    {
+        return $this->getActiveInstance(FactoryAggregateInterface::class)->getFactory($class);
+    }
+
+    public function make(string $class, $options = null)
+    {
+        return $this->getActiveInstance(FactoryAggregateInterface::class)->make($class, $options);
+    }
+
+    public function invoke(callable $callable, $options = null)
+    {
+        return $this->getActiveInstance(InvokerInterface::class)->invoke($callable, $options);
+    }
+
+    public function define(string $id, $concrete = null, bool $shared = false): DefinitionInterface
+    {
+        return $this->getActiveInstance(DefinitionAggregateInterface::class)->define($id, $concrete, $shared);
+    }
+
+    public function addServiceProvider($provider): void
+    {
+        $this->getActiveInstance(ServiceProviderAggregateInterface::class)->addServiceProvider($provider);
+    }
+
+    public function hasTagged(string $tag): bool
+    {
         foreach ($this->getIterator() as $container) {
-            if (!$container instanceof ContainerInterface) {
+            if ($container instanceof DefinitionAggregateInterface && $container->hasTagged($tag)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public function getTagged(string $tag): \Generator
+    {
+        foreach ($this->getIterator() as $container) {
+            if (!$container instanceof DefinitionAggregateInterface) {
                 continue;
             }
 
-            $result = $result->merge($container->getTagged($tag));
+            yield from $container->getTagged($tag);
         }
+    }
 
-        return $result;
+    private function setActiveInstance(ContainerInterface $container, int $priority): void
+    {
+        $types = [
+            ServiceProviderAggregateInterface::class,
+            DefinitionAggregateInterface::class,
+            FactoryAggregateInterface::class,
+            InvokerInterface::class,
+        ];
+
+        foreach ($types as $type) {
+            if (!$container instanceof $type) {
+                continue;
+            }
+
+            [$currentInstance, $currentInstancePriority] = $this->activeInstances[$type] ?? [null, \INF];
+
+            if (null !== $currentInstance && $currentInstancePriority < $priority) {
+                continue;
+            }
+
+            $this->activeInstances[$type] = [$container, $priority];
+        }
     }
 
     /**
-     * Getter for `primary` property
-     * @return ContainerInterface
+     * @template T
+     * @param class-string<T> $class
+     * @return T
      */
-    private function getPrimary(): ContainerInterface
+    private function getActiveInstance(string $class)
     {
-        if (null === $this->primary) {
-            throw new ContainerException('No primary container provided with support of definitions');
+        [$instance] = $this->activeInstances[$class] ?? [null];
+
+        if ($instance instanceof $class) {
+            return $instance;
         }
 
-        return $this->primary;
-    }
-
-    /**
-     * Setter for `primary` property
-     * @param ContainerInterface $primary
-     */
-    private function setPrimary(ContainerInterface $primary): void
-    {
-        if (
-            null === $this->primary ||
-            (
-                !$this->primary instanceof ContainerWithServiceProvidersInterface &&
-                $primary instanceof ContainerWithServiceProvidersInterface
-            )
-        ) {
-            $this->primary = $primary;
-        }
+        throw new ContainerException(\sprintf('No %s instance provided to composite container.', $class));
     }
 }

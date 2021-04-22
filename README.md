@@ -18,13 +18,13 @@ $ composer require spaceonfire/container
 ## Usage
 
 ```php
-use spaceonfire\Container\Container;
-use spaceonfire\Container\ReflectionContainer;
+use spaceonfire\Container\DefinitionContainer;
+use spaceonfire\Container\FactoryContainer;
 use spaceonfire\Container\CompositeContainer;
 
 $container = new CompositeContainer([
-    new Container(),
-    new ReflectionContainer(),
+    new DefinitionContainer(),
+    new FactoryContainer(),
 ]);
 ```
 

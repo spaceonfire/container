@@ -6,17 +6,28 @@ namespace spaceonfire\Container\Fixtures;
 
 class MyClass
 {
-    public function method(A $a = null)
+    public function methodA(A $a = null)
     {
         return 'foo';
     }
 
-    public static function staticMethod(B $b)
+    public static function staticMethodB(B $b)
     {
         return 'bar';
     }
 
-    public function methodForResolve(B $b, A $a, int $int = 42)
+    public function methodBuiltin(int $int)
     {
+        return 'foo';
+    }
+
+    public function methodBuiltinOptional(int $int = 42)
+    {
+        return 'foo';
+    }
+
+    public function methodBuiltinNullable(?int $int)
+    {
+        return 'foo';
     }
 }

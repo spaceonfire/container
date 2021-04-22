@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace spaceonfire\Container;
 
+use PHPUnit\Framework\TestCase;
 use spaceonfire\Container\Exception\ContainerException;
+use spaceonfire\Container\Fixtures\ArrayContainer;
 
-class ContainerAwareTraitTest extends AbstractTestCase
+class ContainerAwareTraitTest extends TestCase
 {
-    private function factory()
+    private function factory(): ContainerAwareInterface
     {
         return new class implements ContainerAwareInterface {
             use ContainerAwareTrait;
@@ -23,7 +25,7 @@ class ContainerAwareTraitTest extends AbstractTestCase
 
     public function testSetContainer(): void
     {
-        $container = $this->prophesize(ContainerInterface::class)->reveal();
+        $container = new ArrayContainer([]);
         $object = $this->factory();
         $object->setContainer($container);
         self::assertSame($container, $object->getContainer());

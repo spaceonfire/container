@@ -4,31 +4,23 @@ declare(strict_types=1);
 
 namespace spaceonfire\Container;
 
+use Psr\Container\ContainerInterface;
+
 trait ContainerAwareTrait
 {
-    /**
-     * @var ContainerInterface|null
-     */
-    protected $container;
+    protected ?ContainerInterface $container = null;
 
-    /**
-     * @inheritDoc
-     */
-    public function setContainer(ContainerInterface $container)
+    public function setContainer(?ContainerInterface $container): void
     {
         $this->container = $container;
-        return $this;
     }
 
-    /**
-     * @inheritDoc
-     */
     public function getContainer(): ContainerInterface
     {
-        if ($this->container instanceof ContainerInterface) {
-            return $this->container;
+        if (null === $this->container) {
+            throw new Exception\ContainerException('No container implementation has been set.');
         }
 
-        throw new Exception\ContainerException('No container implementation has been set.');
+        return $this->container;
     }
 }

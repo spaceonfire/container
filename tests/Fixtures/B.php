@@ -6,15 +6,8 @@ namespace spaceonfire\Container\Fixtures;
 
 class B
 {
-    /**
-     * @var A
-     */
-    private $a;
+    public A $a;
 
-    /**
-     * B constructor.
-     * @param A $a
-     */
     public function __construct(A $a)
     {
         $this->a = $a;

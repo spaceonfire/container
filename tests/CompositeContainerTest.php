@@ -4,24 +4,75 @@ declare(strict_types=1);
 
 namespace spaceonfire\Container;
 
-use ArrayIterator;
-use Prophecy\Argument;
-use Psr\Container\ContainerInterface as PsrContainerInterface;
-use spaceonfire\Collection\Collection;
+use PHPUnit\Framework\TestCase;
 use spaceonfire\Container\Exception\ContainerException;
 use spaceonfire\Container\Exception\NotFoundException;
-use spaceonfire\Container\Fixtures\AbstractClass\AbstractClass;
-use spaceonfire\Container\Fixtures\AbstractClass\AcceptNullableAbstractClass;
-use spaceonfire\Container\Fixtures\AbstractClass\RequiresAbstractClass;
+use spaceonfire\Container\Factory\FactoryOptions;
+use spaceonfire\Container\Factory\Reflection\ReflectionFactoryAggregate;
+use spaceonfire\Container\Factory\Reflection\ReflectionInvoker;
+use spaceonfire\Container\Fixtures\ArrayContainer;
+use spaceonfire\Container\Fixtures\B;
+use spaceonfire\Container\Fixtures\MyClass;
+use spaceonfire\Container\Fixtures\ServiceProvider\MyClassProvider;
 
-class CompositeContainerTest extends AbstractTestCase
+class CompositeContainerTest extends TestCase
 {
+    public function testBasicUsage(): void
+    {
+        $factory = new ReflectionFactoryAggregate();
+        $invoker = new ReflectionInvoker();
+        $definitionContainer = new DefinitionContainer($factory, $invoker);
+        $factoryContainer = new FactoryContainer($factory, $invoker);
+        $compositeContainer = new CompositeContainer($definitionContainer, $factoryContainer);
+
+        self::assertSame($compositeContainer, $definitionContainer->getContainer());
+        self::assertSame($compositeContainer, $factoryContainer->getContainer());
+    }
+
+    public function testInterfacesImplementation(): void
+    {
+        $compositeContainer = new CompositeContainer();
+
+        $factoryContainer = new FactoryContainer();
+
+        $compositeContainer->addContainer($factoryContainer, 50);
+
+        self::assertTrue($compositeContainer->has(FactoryAggregateInterface::class));
+        self::assertTrue($compositeContainer->has(InvokerInterface::class));
+        self::assertFalse($compositeContainer->has(ServiceProviderAggregateInterface::class));
+        self::assertFalse($compositeContainer->has(DefinitionAggregateInterface::class));
+
+        self::assertSame($compositeContainer, $compositeContainer->get(FactoryAggregateInterface::class));
+        self::assertSame($compositeContainer, $compositeContainer->get(InvokerInterface::class));
+
+        $definitionContainer = new DefinitionContainer();
+
+        $compositeContainer->addContainer($definitionContainer, 10);
+
+        self::assertTrue($compositeContainer->has(FactoryAggregateInterface::class));
+        self::assertTrue($compositeContainer->has(InvokerInterface::class));
+        self::assertTrue($compositeContainer->has(ServiceProviderAggregateInterface::class));
+        self::assertTrue($compositeContainer->has(DefinitionAggregateInterface::class));
+
+        self::assertSame($compositeContainer, $compositeContainer->get(FactoryAggregateInterface::class));
+        self::assertSame($compositeContainer, $compositeContainer->get(InvokerInterface::class));
+    }
+
+    public function testNoInterfacesImplementation(): void
+    {
+        $compositeContainer = new CompositeContainer(new ArrayContainer([]));
+
+        $this->expectException(ContainerException::class);
+
+        $compositeContainer->make(MyClass::class);
+    }
+
     public function testHas(): void
     {
-        $composite = new CompositeContainer([
-            $this->createContainerMock(['foo' => 'foo'], PsrContainerInterface::class)->reveal(),
-            $this->createContainerMock(['bar' => 'bar'])->reveal(),
-        ]);
+        $composite = new CompositeContainer(
+            new ArrayContainer(['foo' => 'foo']),
+            new ArrayContainer(['bar' => 'bar']),
+        );
 
         self::assertTrue($composite->has('foo'));
         self::assertTrue($composite->has('bar'));
@@ -30,220 +81,100 @@ class CompositeContainerTest extends AbstractTestCase
 
     public function testGet(): void
     {
-        $composite = new CompositeContainer([
-            $this->createContainerMock(['foo' => 'foo'], PsrContainerInterface::class)->reveal(),
-            $this->createContainerMock(['bar' => 'bar'])->reveal(),
-        ]);
+        $composite = new CompositeContainer(
+            new ArrayContainer(['foo' => 'foo']),
+            new ArrayContainer(['bar' => 'bar']),
+        );
 
         self::assertSame('foo', $composite->get('foo'));
         self::assertSame('bar', $composite->get('bar'));
+    }
+
+    public function testGetNotFound(): void
+    {
+        $composite = new CompositeContainer(
+            new ArrayContainer(['foo' => 'foo']),
+            new ArrayContainer(['bar' => 'bar']),
+        );
 
         $this->expectException(NotFoundException::class);
         $composite->get('baz');
     }
 
+    public function testFactory(): void
+    {
+        $container = new CompositeContainer(new FactoryContainer());
+
+        self::assertTrue($container->hasFactory(MyClass::class));
+        self::assertFalse($container->hasFactory('foo'));
+
+        self::assertInstanceOf(MyClass::class, $container->getFactory(MyClass::class)->make());
+        self::assertInstanceOf(MyClass::class, $container->make(MyClass::class));
+    }
+
+    public function testInvoker(): void
+    {
+        $container = new CompositeContainer(new FactoryContainer());
+
+        self::assertSame('foo', $container->invoke([$container->make(MyClass::class), 'methodA']));
+        self::assertSame('bar', $container->invoke(MyClass::class . '::staticMethodB'));
+        self::assertSame(42, $container->invoke(new class {
+            public function __invoke()
+            {
+                return 42;
+            }
+        }));
+
+        self::assertSame(
+            42,
+            $container->invoke('\\spaceonfire\\Container\\Fixtures\\intval', FactoryOptions::wrap([
+                'value' => '42',
+                'base' => 10,
+            ]))
+        );
+    }
+
+    public function testDefinition(): void
+    {
+        $container = new CompositeContainer(
+            new DefinitionContainer(),
+            new ArrayContainer([]), // skipped on getTagged().
+        );
+
+        $container->addServiceProvider(MyClassProvider::class);
+
+        $container->define('foo', 'bar');
+        $container->define('bar', 'baz', true);
+
+        self::assertTrue($container->has(MyClass::class));
+        self::assertTrue($container->hasTagged('tag'));
+        self::assertTrue($container->has('foo'));
+        self::assertTrue($container->has('bar'));
+
+        self::assertFalse($container->hasTagged('no_tag'));
+        self::assertFalse($container->has(B::class));
+        self::assertFalse($container->has('baz'));
+
+        $tagged = [...$container->getTagged('tag')];
+
+        self::assertCount(1, $tagged);
+        self::assertInstanceOf(MyClass::class, $tagged[0]);
+    }
+
     public function testSetContainer(): void
     {
-        $containerAware = $this->createContainerMock(['bar' => 'bar'], [ContainerInterface::class, ContainerAwareInterface::class]);
-        $containerAware->setContainer(Argument::any())->shouldBeCalled();
+        $factory = new ReflectionFactoryAggregate();
+        $invoker = new ReflectionInvoker();
+        $definitionContainer = new DefinitionContainer($factory, $invoker);
+        $factoryContainer = new FactoryContainer($factory, $invoker);
+        $compositeContainer = new CompositeContainer($definitionContainer, $factoryContainer);
 
-        $composite = new CompositeContainer([
-            $this->createContainerMock(['foo' => 'foo'], PsrContainerInterface::class)->reveal(),
-            $containerAware->reveal(),
-        ]);
+        self::assertSame($compositeContainer, $definitionContainer->getContainer());
+        self::assertSame($compositeContainer, $factoryContainer->getContainer());
 
-        $composite->setContainer($composite);
-    }
+        $matryoshka = new CompositeContainer($compositeContainer);
 
-    public function testAddServiceProvider(): void
-    {
-        $composite = new CompositeContainer([]);
-
-        $primary = $this->createContainerMock(['bar' => 'bar'], ContainerWithServiceProvidersInterface::class);
-        $primary->addServiceProvider(Argument::any())->shouldBeCalled();
-
-        $containers = [
-            $this->createContainerMock([], PsrContainerInterface::class)->reveal(),
-            $this->createContainerMock(['bar' => 'bar'])->reveal(),
-            $primary->reveal(),
-        ];
-
-        $composite->addContainers($containers);
-
-        $composite->addServiceProvider('provider');
-    }
-
-    public function testAddServiceProviderFailed(): void
-    {
-        $this->expectException(ContainerException::class);
-        $composite = new CompositeContainer([
-            $this->createContainerMock([], PsrContainerInterface::class)->reveal(),
-            $this->createContainerMock(['bar' => 'bar'])->reveal(),
-        ]);
-        $composite->addServiceProvider('provider');
-    }
-
-    public function testNoPrimaryContainerInChain(): void
-    {
-        $this->expectException(ContainerException::class);
-        $composite = new CompositeContainer([
-            $this->createContainerMock([], PsrContainerInterface::class)->reveal(),
-        ]);
-        $composite->addServiceProvider('provider');
-    }
-
-    public function testMake(): void
-    {
-        $containerProphecy = $this->createContainerMock();
-        $containerProphecy->make(Argument::type('string'), Argument::type('array'))->shouldBeCalled();
-
-        $composite = new CompositeContainer([$containerProphecy->reveal()]);
-
-        $composite->make('foo');
-    }
-
-    public function testInvoke(): void
-    {
-        $containerProphecy = $this->createContainerMock();
-        $containerProphecy->invoke(Argument::type('callable'), Argument::type('array'))->shouldBeCalled();
-
-        $composite = new CompositeContainer([$containerProphecy->reveal()]);
-
-        $composite->invoke(static function () {
-        });
-    }
-
-    public function testAdd(): void
-    {
-        $containerProphecy = $this->createContainerMock();
-        $containerProphecy->add(Argument::type('string'), Argument::any(), Argument::type('bool'))->shouldBeCalled();
-
-        $composite = new CompositeContainer([$containerProphecy->reveal()]);
-
-        $composite->add('foo', 'bar');
-    }
-
-    public function testShare(): void
-    {
-        $containerProphecy = $this->createContainerMock();
-        $containerProphecy->share(Argument::type('string'), Argument::any())->shouldBeCalled();
-
-        $composite = new CompositeContainer([$containerProphecy->reveal()]);
-
-        $composite->share('foo', 'bar');
-    }
-
-    public function testHasTagged(): void
-    {
-        $composite = new CompositeContainer([]);
-
-        self::assertFalse($composite->hasTagged('tag'));
-
-        $containerProphecy = $this->createContainerMock();
-        $containerProphecy->hasTagged('tag')->willReturn(true)->shouldBeCalled();
-        $composite->addContainer($containerProphecy->reveal());
-
-        self::assertTrue($composite->hasTagged('tag'));
-    }
-
-    public function testGetTagged(): void
-    {
-        $composite = new CompositeContainer([]);
-
-        self::assertTrue($composite->getTagged('tag')->isEmpty());
-
-        $containerWithFoo = $this->createContainerMock();
-        $containerWithFoo->hasTagged('tag')->willReturn(true);
-        $containerWithFoo->getTagged('tag')->willReturn(new Collection(['foo']))->shouldBeCalled();
-        $composite->addContainer($containerWithFoo->reveal());
-
-        $containerWithBar = $this->createContainerMock();
-        $containerWithBar->hasTagged('tag')->willReturn(true);
-        $containerWithBar->getTagged('tag')->willReturn(new Collection(['bar']))->shouldBeCalled();
-        $composite->addContainer($containerWithBar->reveal());
-
-        // psr container without tags support should be skipped
-        $composite->addContainer($this->createContainerMock([], PsrContainerInterface::class)->reveal());
-
-        $resolved = $composite->getTagged('tag');
-
-        self::assertFalse($resolved->isEmpty());
-
-        $foo = $resolved->find(function ($v) {
-            return $v === 'foo';
-        });
-        self::assertSame('foo', $foo);
-
-        $bar = $resolved->find(function ($v) {
-            return $v === 'bar';
-        });
-        self::assertSame('bar', $bar);
-    }
-
-    public function testAddContainersFromIterator(): void
-    {
-        $containers = [
-            10 => $this->createContainerMock(['foo' => 'foo'], PsrContainerInterface::class)->reveal(),
-            20 => $this->createContainerMock(['bar' => 'bar'])->reveal(),
-            'baz' => $this->createContainerMock(['baz' => 'baz'])->reveal(),
-        ];
-
-        $composite = new CompositeContainer(new ArrayIterator($containers));
-
-        self::assertCount(count($containers), $composite);
-        foreach ($composite as $container) {
-            self::assertContains($container, $containers);
-        }
-    }
-
-    public function testContainersPriority(): void
-    {
-        $composite = new CompositeContainer();
-
-        $fooContainer = $this->createContainerMock(['foo' => 'foo'])->reveal();
-        $composite->addContainer($fooContainer, 10);
-
-        self::assertSame('foo', $composite->get('foo'));
-
-        $barContainer = $this->createContainerMock(['foo' => 'bar'])->reveal();
-        $composite->addContainer($barContainer, 9);
-
-        self::assertSame('bar', $composite->get('foo'));
-
-        $bazContainer = $this->createContainerMock(['foo' => 'baz'])->reveal();
-        $composite->addContainer($bazContainer, 8);
-
-        self::assertSame('baz', $composite->get('foo'));
-    }
-
-    public function testGetAcceptNullableAbstractClass(): void
-    {
-        $composite = new CompositeContainer([
-            new Container(),
-            new ReflectionContainer(),
-        ]);
-
-        $object = $composite->get(AcceptNullableAbstractClass::class);
-
-        self::assertNull($object->getAbstractClass());
-    }
-
-    public function testGetRequiresAbstractClass(): void
-    {
-        $composite = new CompositeContainer();
-
-        $abstractClass = new class extends AbstractClass {
-        };
-
-        $abstractClassContainer = $this->createContainerMock([
-            AbstractClass::class => $abstractClass,
-        ])->reveal();
-
-        $composite->addContainer($abstractClassContainer);
-        $composite->addContainer(new ReflectionContainer());
-
-        $object = $composite->get(RequiresAbstractClass::class);
-
-        self::assertSame($abstractClass, $object->getAbstractClass());
+        self::assertSame($matryoshka, $definitionContainer->getContainer());
+        self::assertSame($matryoshka, $factoryContainer->getContainer());
     }
 }
